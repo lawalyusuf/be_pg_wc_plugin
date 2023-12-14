@@ -719,7 +719,8 @@ class WC_Gateway_Hydrogen extends WC_Payment_Gateway_CC
 	/**
 	 * Outputs scripts used for hydrogen payment.
 	 */
-	public function payment_scripts()
+	
+	public function payment_scripts_old()
 	{
 
 		if (isset($_GET['pay_for_order']) || !is_checkout_pay_page()) {
@@ -857,6 +858,157 @@ class WC_Gateway_Hydrogen extends WC_Payment_Gateway_CC
 
 		wp_localize_script('wc_hydrogen', 'wc_hydrogen_params', $hydrogen_params);
 	}
+
+	public function payment_scripts()
+	{
+
+		if (isset($_GET['pay_for_order']) || !is_checkout_pay_page()) {
+			return;
+		}
+
+		if ($this->enabled === 'no') {
+			return;
+		}
+
+		$order_key = urldecode($_GET['key']);
+		$order_id  = absint(get_query_var('order-pay'));
+
+		$order = wc_get_order($order_id);
+
+		if ($this->id !== $order->get_payment_method()) {
+			return;
+		}
+
+		$script_src = $this->testmode ?
+			'https://hydrogenshared.blob.core.windows.net/paymentgateway/paymentGatewayInegration.js' :
+			'https://hydrogenshared.blob.core.windows.net/paymentgateway/HydrogenPGIntegration.js';
+
+		$secret_key = $this->testmode ? $this->test_secret_key : $this->live_secret_key;
+
+		$suffix = (defined('SCRIPT_DEBUG') && SCRIPT_DEBUG) ? '' : '.min';
+
+		wp_enqueue_script('jquery');
+
+		wp_enqueue_script('hydrogen', $script_src, array('jquery'), WC_HYDROGEN_VERSION, false);
+
+		// Add 'module' attribute to the script tag
+		wp_script_add_data('hydrogen', 'module', true);
+
+		wp_enqueue_script('wc_hydrogen', plugins_url('assets/js/hydrogen' . $suffix . '.js', WC_HYDROGEN_MAIN_FILE), array('jquery', 'hydrogen'), WC_HYDROGEN_VERSION, false);
+
+		$hydrogen_params = array(
+			// 'key' => $this->secret_key,
+			'key' => $secret_key,
+		);
+
+
+		if (is_checkout_pay_page() && get_query_var('order-pay')) {
+
+			$email         = $order->get_billing_email();
+			$amount        = $order->get_total(); // hydrogen payment amount
+			$txnref        = $order_id . '_' . time();
+			$the_order_id  = $order->get_id();
+			$the_order_key = $order->get_order_key();
+			$currency      = $order->get_currency();
+
+			if ($the_order_id == $order_id && $the_order_key == $order_key) {
+
+				$hydrogen_params['email']    = $email;
+				$hydrogen_params['amount']   = $amount;
+				$hydrogen_params['txnref']   = $txnref;
+				$hydrogen_params['currency'] = $currency;
+
+				// Get the "My Account" URL
+				$hydrogen_wc_redirect_url = wc_get_page_permalink('myaccount');
+
+				// Pass the "My Account" URL to your JavaScript
+				$hydrogen_params['hydrogen_wc_redirect_url'] = $hydrogen_wc_redirect_url;
+			}
+
+			if ($this->split_payment) {
+
+				$hydrogen_params['subaccount_code'] = $this->subaccount_code;
+				$hydrogen_params['charges_account'] = $this->charges_account;
+
+				if (empty($this->transaction_charges)) {
+					$hydrogen_params['transaction_charges'] = '';
+				} else {
+					$hydrogen_params['transaction_charges'] = $this->transaction_charges * 100;
+				}
+			}
+
+			if ($this->custom_metadata) {
+
+				if ($this->meta_order_id) {
+
+					$hydrogen_params['meta_order_id'] = $order_id;
+				}
+
+				if ($this->meta_name) {
+
+					$hydrogen_params['meta_name'] = $order->get_billing_first_name() . ' ' . $order->get_billing_last_name();
+				}
+
+				if ($this->meta_email) {
+
+					$hydrogen_params['meta_email'] = $email;
+				}
+
+				if ($this->meta_phone) {
+
+					$hydrogen_params['meta_phone'] = $order->get_billing_phone();
+				}
+
+				if ($this->meta_products) {
+
+					$line_items = $order->get_items();
+
+					$products = '';
+
+					foreach ($line_items as $item_id => $item) {
+						$name      = $item['name'];
+						$quantity  = $item['qty'];
+						$products .= $name . ' (Qty: ' . $quantity . ')';
+						$products .= ' | ';
+					}
+
+					$products = rtrim($products, ' | ');
+
+					$hydrogen_params['meta_products'] = $products;
+				}
+
+				if ($this->meta_billing_address) {
+
+					$billing_address = $order->get_formatted_billing_address();
+					$billing_address = esc_html(preg_replace('#<br\s*/?>#i', ', ', $billing_address));
+
+					$hydrogen_params['meta_billing_address'] = $billing_address;
+				}
+
+				if ($this->meta_shipping_address) {
+
+					$shipping_address = $order->get_formatted_shipping_address();
+					$shipping_address = esc_html(preg_replace('#<br\s*/?>#i', ', ', $shipping_address));
+
+					if (empty($shipping_address)) {
+
+						$billing_address = $order->get_formatted_billing_address();
+						$billing_address = esc_html(preg_replace('#<br\s*/?>#i', ', ', $billing_address));
+
+						$shipping_address = $billing_address;
+					}
+
+					$hydrogen_params['meta_shipping_address'] = $shipping_address;
+				}
+			}
+
+			$order->update_meta_data('_hydrogen_txn_ref', $txnref);
+			$order->save();
+		}
+
+		wp_localize_script('wc_hydrogen', 'wc_hydrogen_params', $hydrogen_params);
+	}
+
 
 	/**
 	 * Load admin scripts.
